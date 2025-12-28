@@ -23,11 +23,15 @@
 #  24 Sep 25   0.3   - Added ability to include common files - MT
 #  15 Oct 25   0.4   - Evaluate date and archive name before use (and allow
 #                      branch to be optional) - MT
+#  28 Dec 25   0.5   - Added a rule to prevent make from using the built‑in
+#                      rule when linking object files since the latest make
+#                      versions are stricter - MT
+#                      
 #
 
 PROJECT	= $(strip $(notdir $(abspath $(CURDIR)/.)))
 
-COMMON	=  x11-scale-area x11-fonts x11-messages gcc-wait 
+COMMON	=  x11-scale-area 
 #SOURCE	=  $(wildcard *.c)  # Compile all source files
 SOURCE	=  $(filter-out $(COMMON:=.c), $(wildcard *.c))  # Compile all source files other than common files
 INCLUDE	=  $(wildcard *.h)  # Automatically get all include files
@@ -37,7 +41,7 @@ PROGRAM	=  $(SOURCE:.c=)
 
 FILES		=  $(SOURCE) $(COMMON:=.c) $(BACKUP) $(INCLUDE) makefile LICENSE $(wildcard *.png) # README.md .gitignore .gitattributes
 LANG		=  LANG_$(shell (echo $$LANG | cut -f 1 -d '_'))
-UNAME		=  $(shell uname)$(OBJECT) 
+UNAME		=  $(shell uname)
 BRANCH	=  $(shell git rev-parse --abbrev-ref HEAD > /dev/null 2>&1 && echo `git rev-parse --abbrev-ref HEAD 2>/dev/null` || true)
 COMPILER	= `$(CC) -v 2>&1 | grep '$(CC) version' | sed -e 's/([^()]*)//g' | sed -e 's/[ \t]*$$//g'`
 
@@ -46,12 +50,18 @@ FLAGS	=  -fcommon -Wall -pedantic -std=gnu99
 FLAGS	+= -Wno-comment -Wno-unused-function #-Wno-deprecated-declarations -Wno-builtin-macro-redefined
 FLAGS	+= -D $(LANG)
 
-_date			= `date +'%Y%m%d%H%M'`
+_date	= `date +'%Y%m%d%H%M'`
 
 ifeq ($(BRANCH),)
-_archive		= $(PROJECT)-$(_date).tar.gz
+_archive= $(PROJECT)-$(_date).tar.gz
 else
-_archive		= $(PROJECT)-$(BRANCH)-$(_date).tar.gz
+_archive= $(PROJECT)-$(BRANCH)-$(_date).tar.gz
+endif
+
+# SDL Specific settings
+ifneq ($(shell pkg-config --exists sdl2 > /dev/null 2>&1 && echo "SDL2" || echo ""),)
+SFLAGS	= -D__SDL__ `pkg-config --cflags sdl2`
+SLIBS	= `pkg-config --libs sdl2`
 endif
 
 # Operating system specific settings
@@ -70,9 +80,9 @@ ifdef DEBUG
 FLAGS	+=  -g
 endif
 
-make:common $(PROGRAM) $(OBJECT)
+make:common $(PROGRAM) $(OBJECT)  # Build common sources, then all programs and their object files
 
-all:clean common $(PROGRAM) $(OBJECT)
+all:clean common $(PROGRAM) $(OBJECT)  # Build common sources, programs, and objects
 
 common:  # Compile common sources
 ifneq ($(COMMON),)
@@ -82,17 +92,19 @@ endif
 	@$(CC) $(FLAGS) -c $(COMMON:=.c) 
 endif
 
+$(PROGRAM): %: %.o  # Prevents make from falling back to the built‑in rule
+
 %.o: %.c  # Compile other  sources (won't include common - already compiled)
 ifdef DEBUG
-	@echo $(CC) $(FLAGS) -c $<
+	@echo $(CC) $(FLAGS) $(SFLAGS) -c $<
 endif
 	@$(CC) $(FLAGS) -c $<
 
 %: %.o  # Link and display executable file name to indecate progress
 ifdef DEBUG
-	@echo $(CC) $(FLAGS) $(COMMON:=.o) -o $@ $<  $(LIBS)
+	@echo $(CC) $(FLAGS) $(COMMON:=.o) -o $@ $<  $(LIBS) $(SLIBS) 
 endif
-	@$(CC) $(FLAGS) $(COMMON:=.o) -o $@ $< $(LIBS)
+	@$(CC) $(FLAGS) $(COMMON:=.o) -o $@ $< $(LIBS) $(SLIBS) 
 	@ls --color $@
 
 list:

@@ -21,6 +21,10 @@
  * 03 Oct 25  0.1.0001  - Initial version - MT
  * 05 Oct 25            - Added command line options - MT
  * 28 Oct 25  0.2       - Parse geometry using XParseGeometry() - MT
+ * 27 Dec 25            - Disabling  the  background  pixmap  prevents  the 
+ *                        window manager from updating the background  when 
+ *                        an  expose  event occurs, which stops the  window 
+ *                        flickering when it is redrawn - MT
  * 
  */
 
@@ -37,8 +41,6 @@
 
 #define  DEBUG
 
-#define  TESTCARD
-
 #include <errno.h>      /* errno */
 
 #include <stdio.h>
@@ -52,13 +54,14 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/Xatom.h>  /* XA_ATOM, etc */
 
-#include "x11-messages.h"
-#include "x11-fonts.h"
 #include "x11-scale-area.h"
-
 #include "gcc-debug.h"
 
+const char *h_err_display = "Cannot connect to X server '%s'\n";
+const char *h_err_display_properties = "Unable to get display properties\n";
+const char *h_err_display_colour = "Requires a %d-bit colour display\n";
 
 void v_version() { /* Display version information */
    fprintf(stdout, "%s: Version %s ", NAME, VERSION);
@@ -73,16 +76,11 @@ void v_version() { /* Display version information */
 }
  
 void v_about() { /* Display help text */
-   fprintf(stdout, "Usage: %s [OPTION]... [FILE]...\n", NAME);
+   fprintf(stdout, "Usage: %s [OPTION]... [\n", NAME);
    fprintf(stdout, "Concatenate FILE(s)to standard output.\n\n");
-   fprintf(stdout, "  -d, --delay              delay 8ms between each byte\n");
-   fprintf(stdout, "  -f, --filenames          display filenames\n");
-   fprintf(stdout, "  -n, --number             number all output lines \n");
-   fprintf(stdout, "  -r, --restart            line numbers start at zero, implies -n\n");
-   fprintf(stdout, "  -s, --squeeze-blank      suppress repeated blank lines\n");
+   fprintf(stdout, "      --geometry +x+y      specify initial window position\n");
    fprintf(stdout, "  -?, --help               display this help and exit\n");
    fprintf(stdout, "      --version            output version information and exit\n\n");
-   fprintf(stdout, "With no FILE, or when FILE is -, read standard input.\n");
    exit(0);
 }
 
@@ -233,7 +231,7 @@ int main(int argc, char *argv[])
    Atom wm_delete;
    XRectangle o_image_size;
    XRectangle o_screen_size;
-   
+
    char *s_title = NAME;               /* Windows title */
    char *s_display_name = "";          /* Use the default display */
 
@@ -249,7 +247,6 @@ int main(int argc, char *argv[])
    int i_count, i_index;
    char b_abort = 0;
 
-   
    if (!(x_display = XOpenDisplay(s_display_name))) v_error (errno, h_err_display, s_display_name);  /* Open the default display */
 
    i_screen = DefaultScreen(x_display);  /* Get the default screen for our X server */
@@ -292,7 +289,6 @@ int main(int argc, char *argv[])
                {
                   char *c_geometry = argv[i_count] + 11;
                   char *c_char;
-                  int i_length = 0;
 
                   i_window_left = 0;
                   i_window_top = 0;
@@ -315,7 +311,6 @@ int main(int argc, char *argv[])
                   {
                      char *c_geometry = argv[i_count + 1];
                      char *c_char;
-                     int i_length = 0;
 
                      i_window_left = 0;
                      i_window_top = 0;
@@ -379,7 +374,7 @@ int main(int argc, char *argv[])
 
    h_size_hint.flags = PMinSize | PMaxSize | PAspect;
    /** XSetWMNormalHints(x_display, x_window, &h_size_hint); /* Set by XSetStandardProperties */
-
+   
    /* Get window geometry (necessary to get colour depth) */
    if (XGetGeometry(x_display, x_window, &RootWindow(x_display, i_screen), &i_window_left, &i_window_top, &i_window_width, &i_window_height, &i_window_border,  &i_colour_depth) == False)
       v_error(errno, h_err_display_properties);
@@ -389,6 +384,25 @@ int main(int argc, char *argv[])
 
    /* Set window title and size */
    XSetStandardProperties(x_display, x_window, s_title, s_title, None, argv, argc, &h_size_hint);  /* Set the window title and icon */
+   
+   /* Declare the atoms we want to allow as window actions */
+   Atom allowed_actions[3];
+   allowed_actions[0] = XInternAtom(x_display, "_NET_WM_ACTION_RESIZE", False);  /* allow resizing */
+   allowed_actions[1] = XInternAtom(x_display, "_NET_WM_ACTION_MOVE", False);    /* allow moving */
+   allowed_actions[2] = XInternAtom(x_display, "_NET_WM_ACTION_CLOSE", False);   /* allow closing */
+
+   /* Get the atom for the property _NET_WM_ALLOWED_ACTIONS */
+   Atom net_wm_allowed_actions = XInternAtom(x_display, "_NET_WM_ALLOWED_ACTIONS", False);
+
+   XChangeProperty(x_display, x_window,
+                   net_wm_allowed_actions, XA_ATOM, 32,
+                   PropModeReplace,
+                   (unsigned char *)allowed_actions,
+                   3);
+
+
+   /* Disable background to prevent the window manager from clearing the window before it is redrawn */
+   XSetWindowBackgroundPixmap(x_display, x_window, None);
 
    /* Select input events and map (show) the window */
    XSelectInput(x_display, x_window, ExposureMask | KeyPressMask | StructureNotifyMask);
@@ -398,15 +412,13 @@ int main(int argc, char *argv[])
 
    if (i_colour_depth != COLOUR_DEPTH) v_error(errno, h_err_display_colour, COLOUR_DEPTH);  /* Check colour depth */
 
-   if (!(h_normal_font = h_get_font(x_display, s_normal_fonts))) v_error(errno, h_err_font, s_normal_fonts[0]);
-   if (!(h_small_font = h_get_font(x_display, s_small_fonts))) v_error(errno, h_err_font, s_small_fonts[0]);
-   if (!(h_large_font = h_get_font(x_display, s_large_fonts))) v_error(errno, h_err_font, s_large_fonts[0]);
-
    o_image_size.width = i_window_width;
    o_image_size.height = i_window_height;
-   x_image = XCreatePixmap(x_display, XDefaultRootWindow(x_display), o_image_size.width, o_image_size.height, DefaultDepth(x_display, i_screen)); /* Create a source pixmap */
+   x_image = XCreatePixmap(x_display, x_window, o_image_size.width, o_image_size.height, DefaultDepth(x_display, i_screen)); /* Create a source pixmap */
    v_draw_test_card(x_display, x_image, x_context, i_screen, o_image_size.width, o_image_size.height);
 
+   XSetForeground(x_display, x_context, BlackPixel(x_display, i_screen));
+   
    while (True) {
       XNextEvent(x_display, &x_event);
 
@@ -420,9 +432,13 @@ int main(int argc, char *argv[])
       {
          if (i_window_width > h_size_hint.max_width) i_width = h_size_hint.max_width; else i_width =  i_window_width;
          if (i_window_height > h_size_hint.max_height) i_height = h_size_hint.max_height; else i_height =  i_window_height;
+         i_width =  i_window_width; i_height =  i_window_height;
          debug(printf("%d x %d (%d x %d) (%d%%)\n", h_size_hint.min_width, h_size_hint.min_height, i_window_width, i_window_height, (int)((float) i_window_height / h_size_hint.min_height * 100.0)));
-         //XCopyArea(x_display, x_image, x_window, x_context, 0, 0, o_image_size.width, o_image_size.height, (i_window_width - o_image_size.width) / 2, (i_window_height - o_image_size.height) / 2);
+
          XScaleArea(x_display, x_image, x_window, x_context, 0, 0, o_image_size.width, o_image_size.height, (i_window_width - i_width) / 2, (i_window_height - i_height) / 2, i_width, i_height);
+
+         //XFillRectangle(x_display, x_window, x_context, 0, 0, i_window_width, i_window_height);  /* Fill window to clear it */
+         //XCopyArea(x_display, x_image, x_window, x_context, 0, 0, o_image_size.width, o_image_size.height, (i_window_width - o_image_size.width) / 2, (i_window_height - o_image_size.height) / 2);
       }
 
       if (x_event.type == ClientMessage) 
